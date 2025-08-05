@@ -28,6 +28,7 @@ import cvxpy.settings as s
 from cvxpy import Minimize, Problem
 from cvxpy.atoms.affine.upper_tri import upper_tri_to_full
 from cvxpy.atoms.errormsg import SECOND_ARG_SHOULD_NOT_BE_EXPRESSION_ERROR_MESSAGE
+from cvxpy.atoms.integrate import numerical_integration_1d
 from cvxpy.expressions.constants import Constant, Parameter
 from cvxpy.expressions.variable import Variable
 from cvxpy.reductions.solvers.defines import INSTALLED_MI_SOLVERS
@@ -2116,3 +2117,34 @@ class TestDotsort(BaseTest):
         with self.assertRaises(Exception) as cm:
             cp.Problem(cp.Minimize(cp.dotsort(self.x, p_squared))).solve(enforce_dpp=True)
         assert "You are solving a parameterized problem that is not DPP" in str(cm.exception)
+
+    def test_numerical_integration_1d(self):
+        """Test numerical integration of a simple expression using various methods."""
+
+        def f(t):
+            return t**2
+        a, b = 0, 1
+        expected = 1 / 3  # Integral of t^2 over [0, 1]
+
+        methods = ["trapezoid", "midpoint", "simpsons", "left_riemann", "right_riemann"]
+        for method in methods:
+            with self.subTest(method=method):
+                # First get the expression
+                expr = numerical_integration_1d(f, a, b, n=1000, method=method)
+                self.assertIsInstance(expr, cp.Expression)
+                
+                # Then evaluate it in a problem
+                prob = cp.Problem(cp.Minimize(expr))  # We minimize because we just want to evaluate
+                prob.solve()
+                val = prob.value
+                
+                # Now compare the numerical value
+                self.assertAlmostEqual(val, expected, places=2)
+
+        # Edge case: zero-width interval
+        result = numerical_integration_1d(f, 1, 1, n=1000, method="trapezoid")
+        self.assertEqual(result.value, 0)  # Need to get the value of the Constant
+
+        # Invalid method should raise ValueError
+        with self.assertRaises(ValueError):
+            numerical_integration_1d(f, a, b, method="bad_method")

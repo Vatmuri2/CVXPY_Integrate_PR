@@ -14,66 +14,161 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from typing import List, Tuple
 
 import numpy as np
 
-import cvxpy as cvx
+import cvxpy as cp
+from cvxpy.atoms.atom import Atom
+from cvxpy.expressions.expression import Expression
 
 
-def numerical_integration_1d(function, a, b, n=1000, method="trapezoid"):
-    """Numerically integrate f(x) from a to b using the specified method.
+class integrate(Atom):
+    """Numerical integration of a function over an interval [a, b].
     
-    Args:
-        function: Callable f(x) returning a scalar or CVXPY expression.
-        a, b: Integration limits (b > a).
-        n: Number of subintervals (must be even for Simpson's rule).
-        method: One of ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"].
+    Supports Riemann sums (left/right/midpoint), trapezoid rule, and Simpson's rule.
+    The function must return CVXPY expressions or constants.
     
-    Returns:
-        CVXPY expression or numeric value representing the integral.
+    Parameters
+    ----------
+    function : callable
+        Function f(x) returning a scalar or CVXPY expression
+    a : numeric or CVXPY expression
+        Lower bound of integration
+    b : numeric or CVXPY expression
+        Upper bound of integration
+    n : int, optional
+        Number of subintervals, defaults to 1000 (must be even for Simpson's rule)
+    method : str, optional
+        Integration method, defaults to "trapezoid". 
+        One of ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"]
+        
+    Example
+    -------
+    x = cp.Variable()
+    expr = integrate(lambda t: cp.exp(x*t), 0, 1)
     """
-    # === Input Validation ===
-    if a == b:
-        return cvx.Constant(0)
-    
-    if n <= 0:
-        raise ValueError("n must be positive.")
-    if b < a:
-        raise ValueError(f"b ({b}) must be ≥ a ({a}).")
-    if method not in ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"]:
-        raise ValueError(f"Unsupported method: {method}")
+    def __init__(self, function, a, b, n=1000, method="trapezoid"):
+        self.function = function
+        self.a = a if isinstance(a, Expression) else cp.Constant(a)
+        self.b = b if isinstance(b, Expression) else cp.Constant(b)
+        self.n = n
+        self.method = method
+        
+        # Validate inputs
+        if n <= 0:
+            raise ValueError("n must be positive")
+        if method not in ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"]:
+            raise ValueError(f"Unsupported method: {method}")
+        if method == "simpsons" and n % 2 != 0:
+            self.n = n + 1  # Force even n for Simpson's rule
+            
+        # Test evaluation to determine output shape
+        has_a_value = hasattr(self.a, 'value')
+        has_b_value = hasattr(self.b, 'value')
+        if has_a_value and has_b_value:
+            test_x = (self.a.value + self.b.value) / 2
+        else:
+            test_x = 0.5        
+        test_expr = self.function(test_x)
+        if isinstance(test_expr, Expression):
+            self._shape = test_expr.shape
+        else:
+            self._shape = ()  # Scalar output
+        
+        super().__init__(self.a, self.b)
 
-    h = (b - a) / n  # Subinterval width
+    def numeric(self, values) -> np.ndarray:
+        """Numerical integration implementation."""
+        a_val, b_val = values
+        
+        # Early return for zero-width interval
+        if a_val == b_val:
+            if not self._shape:  # Scalar output
+                return 0
+            else:
+                return np.zeros(self._shape)
+            
+        h = (b_val - a_val) / self.n
+        
+        # Generate sample points
+        if self.method == "left_riemann":
+            x = np.linspace(a_val, b_val - h, self.n)
+        elif self.method == "right_riemann":
+            x = np.linspace(a_val + h, b_val, self.n)
+        elif self.method == "midpoint":
+            x = np.linspace(a_val + h/2, b_val - h/2, self.n)
+        elif self.method == "trapezoid":
+            x = np.linspace(a_val, b_val, self.n + 1)
+        elif self.method == "simpsons":
+            x = np.linspace(a_val, b_val, self.n + 1)
+        
+        # Evaluate function at all points
+        y_values = []
+        for xi in x:
+            y = self.function(xi)
+            if isinstance(y, Expression) and hasattr(y, 'value'):
+                y_values.append(y.value)
+            else:
+                y_values.append(y)
+        y = np.array(y_values)
+        
+        # Compute integral
+        if self.method in ["left_riemann", "right_riemann", "midpoint"]:
+            return h * np.sum(y, axis=0)
+        elif self.method == "trapezoid":
+            s = np.sum(y[1:-1], axis=0) if self.n > 1 else 0
+            return h * (0.5 * (y[0] + y[-1]) + s)
+        elif self.method == "simpsons":
+            odd_sum = np.sum(y[1:-1:2], axis=0)
+            even_sum = np.sum(y[2:-2:2], axis=0) if self.n > 2 else 0
+            return (h / 3) * (y[0] + y[-1] + 4 * odd_sum + 2 * even_sum)
 
-    # === Convert Numeric Values to CVXPY Constants ===
-    def to_expr(val):
-        return cvx.Constant(val) if isinstance(val, (int, float, np.number)) else val
+    def validate_arguments(self) -> None:
+        """Check that a < b and function returns valid expressions."""
+        if not (self.a.is_constant() and self.b.is_constant()):
+            raise ValueError("Integration bounds a and b must be constants")
+        if hasattr(self.a, 'value') and hasattr(self.b, 'value') and self.a.value > self.b.value:
+            raise ValueError(f"b ({self.b.value}) must be ≥ a ({self.a.value})")
 
-    # === Integration Methods ===
-    if method == "left_riemann":
-        x = np.linspace(a, b - h, n)  # Left endpoints
-    elif method == "right_riemann":
-        x = np.linspace(a + h, b, n)  # Right endpoints
-    elif method == "midpoint":
-        x = np.linspace(a + h/2, b - h/2, n)  # Midpoints
-    elif method == "trapezoid":
-        x = np.linspace(a, b, n + 1)  # All endpoints
-    elif method == "simpsons":
-        if n % 2 != 0:
-            n += 1  # Force even n for Simpson's
-            h = (b - a) / n
-        x = np.linspace(a, b, n + 1)  # All endpoints
+    def shape_from_args(self):
+        """Return the shape of the integral output."""
+        return self._shape
 
-    # Evaluate f(x) at all sample points
-    y = [to_expr(function(xi)) for xi in x]
+    def sign_from_args(self) -> Tuple[bool, bool]:
+        """Returns sign (is positive, is negative) of the expression."""
+        # Generally unknown without knowledge of the function
+        return (False, False)
 
-    # Compute the integral approximation
-    if method in ["left_riemann", "right_riemann", "midpoint"]:
-        return h * cvx.sum(y)
-    elif method == "trapezoid":
-        s = cvx.sum(y[1:-1]) if n > 1 else cvx.Constant(0)
-        return h * (0.5 * (y[0] + y[-1]) + s)
-    elif method == "simpsons":
-        odd_sum = cvx.sum(y[1:-1:2])
-        even_sum = cvx.sum(y[2:-2:2]) if n > 2 else cvx.Constant(0)
-        return (h / 3) * (y[0] + y[-1] + 4 * odd_sum + 2 * even_sum)
+    def get_data(self) -> List:
+        """Return data needed to reconstruct the expression."""
+        return [self.function, self.n, self.method]
+
+    def is_atom_convex(self) -> bool:
+        """Is the atom convex?"""
+        # Depends on the function being integrated
+        return False
+
+    def is_atom_concave(self) -> bool:
+        """Is the atom concave?"""
+        # Depends on the function being integrated
+        return False
+
+    def is_incr(self, idx) -> bool:
+        """Is the composition non-decreasing in argument idx?"""
+        # Generally unknown without knowledge of the function
+        return False
+
+    def is_decr(self, idx) -> bool:
+        """Is the composition non-increasing in argument idx?"""
+        # Generally unknown without knowledge of the function
+        return False
+        
+    def _grad(self, values):
+        """Gradient of the atom with respect to its arguments.
+        
+        This is a required method for all Atom subclasses.
+        """
+        # Since we're just doing numerical integration, we don't have
+        # a closed-form gradient. The DCP rules will handle this.
+        return None

@@ -28,7 +28,7 @@ import cvxpy.settings as s
 from cvxpy import Minimize, Problem
 from cvxpy.atoms.affine.upper_tri import upper_tri_to_full
 from cvxpy.atoms.errormsg import SECOND_ARG_SHOULD_NOT_BE_EXPRESSION_ERROR_MESSAGE
-from cvxpy.atoms.integrate import numerical_integration_1d
+from cvxpy.atoms.integrate import integrate
 from cvxpy.expressions.constants import Constant, Parameter
 from cvxpy.expressions.variable import Variable
 from cvxpy.reductions.solvers.defines import INSTALLED_MI_SOLVERS
@@ -2118,7 +2118,7 @@ class TestDotsort(BaseTest):
             cp.Problem(cp.Minimize(cp.dotsort(self.x, p_squared))).solve(enforce_dpp=True)
         assert "You are solving a parameterized problem that is not DPP" in str(cm.exception)
 
-    def test_numerical_integration_1d(self):
+    def test_integrate(self):
         """Test numerical integration of a simple expression using various methods."""
 
         def f(t):
@@ -2130,7 +2130,7 @@ class TestDotsort(BaseTest):
         for method in methods:
             with self.subTest(method=method):
                 # First get the expression
-                expr = numerical_integration_1d(f, a, b, n=1000, method=method)
+                expr = integrate(f, a, b, n=1000, method=method)
                 self.assertIsInstance(expr, cp.Expression)
                 
                 # Then evaluate it in a problem
@@ -2142,9 +2142,9 @@ class TestDotsort(BaseTest):
                 self.assertAlmostEqual(val, expected, places=2)
 
         # Edge case: zero-width interval
-        result = numerical_integration_1d(f, 1, 1, n=1000, method="trapezoid")
+        result = integrate(f, 1, 1, n=1000, method="trapezoid")
         self.assertEqual(result.value, 0)  # Need to get the value of the Constant
 
         # Invalid method should raise ValueError
         with self.assertRaises(ValueError):
-            numerical_integration_1d(f, a, b, method="bad_method")
+            integrate(f, a, b, method="bad_method")

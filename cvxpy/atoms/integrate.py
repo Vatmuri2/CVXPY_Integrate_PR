@@ -131,7 +131,7 @@ class integrate(Atom):
         if hasattr(self.a, 'value') and hasattr(self.b, 'value') and self.a.value > self.b.value:
             raise ValueError(f"b ({self.b.value}) must be ≥ a ({self.a.value})")
 
-    def shape_from_args(self):
+    def shape_from_args(self) -> Tuple[int, ...]:
         """Return the shape of the integral output."""
         return self._shape
 

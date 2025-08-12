@@ -24,162 +24,163 @@ from cvxpy.expressions.constants import Constant
 
 
 class integrate(Atom):
-    """Numerical integration of a function over an interval [a, b].
-    
-    This atom performs numerical integration using vectorized operations
-    for improved performance.
-    
+    """Numerical integration of a function over a (possibly multidimensional) box [a, b].
+
+    Supports multi-D integration if `a` and `b` are sequences (lists or arrays).
+    Supported methods: "left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons".
+    Simpson's rule requires even intervals per dimension.
+
     Parameters
     ----------
     function : callable
-        Function f(x) returning a scalar or numpy array.
-        The function should be vectorized (accept numpy arrays).
-    a : numeric
-        Lower bound of integration (must be constant)
-    b : numeric  
-        Upper bound of integration (must be constant)
-    n : int, optional
-        Number of subintervals, defaults to 1000
+        Function f(x) or f(x, y, ...) returning a scalar or numpy array.
+        Should support vectorized evaluation if possible.
+    a : scalar or sequence
+        Lower bound(s) (must be constant).
+    b : scalar or sequence
+        Upper bound(s) (must be constant).
+    n : int or sequence, optional
+        Number of subintervals per dimension, defaults to 1000.
     method : str, optional
-        Integration method, defaults to "trapezoid"
-        
+        Integration method; default is "trapezoid".
+
     Example
     -------
-    # For constant integration
+    # 1D
     result = integrate(lambda x: x**2, 0, 1)
-    
-    # For vectorized functions
-    result = integrate(np.sin, 0, np.pi)
+
+    # Multi-D
+    result = integrate(lambda x, y: x**2/y, [-1, 1], [0.1, 2], n=200, method="simpsons")
     """
 
     def __init__(self, function, a, b, n=1000, method="trapezoid") -> None:
         self.function = function
-        self.n = n
         self.method = method
-        self.lower_bound = float(a)
-        self.upper_bound = float(b)
-        
-        # Create constant arguments for the parent class
-        a_const = Constant(self.lower_bound)
-        b_const = Constant(self.upper_bound)
-        super(integrate, self).__init__(a_const, b_const)
+
+        a_arr = np.atleast_1d(a)
+        b_arr = np.atleast_1d(b)
+        if a_arr.shape != b_arr.shape:
+            raise ValueError(f"Bounds a{a_arr.shape} and b{b_arr.shape} must match shapes.")
+        self.dim = a_arr.size
+
+        if isinstance(n, int):
+            self.n = [n] * self.dim
+        else:
+            self.n = list(n)
+            if len(self.n) != self.dim:
+                msg = f"n must match number of dimensions: got n={self.n}, dim={self.dim}"
+                raise ValueError(msg)
+
+        self.lower_bounds = a_arr.astype(float)
+        self.upper_bounds = b_arr.astype(float)
+
+        a_const = Constant(self.lower_bounds)
+        b_const = Constant(self.upper_bounds)
+        super().__init__(a_const, b_const)
+
     def validate_arguments(self) -> None:
-        """Validates the arguments for the integrate atom."""
-        # Validate n
-        if self.n <= 0:
-            raise ValueError("n must be positive")
-        
-        # Validate method
         valid_methods = ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"]
         if self.method not in valid_methods:
             raise ValueError(f"Unsupported method: {self.method}")
-        
-        # Validate Simpson's rule requirement
-        if self.method == "simpsons" and self.n % 2 != 0:
-            raise ValueError("For Simpson's rule, n must be even")
-        
-        # Integration bounds must be constants
+        if any(ni <= 0 for ni in self.n):
+            raise ValueError("All n (subintervals per dimension) must be positive.")
+        if self.method == "simpsons":
+            for ax, ni in enumerate(self.n):
+                if ni % 2 != 0:
+                    msg = f"For simpsons method, n on axis {ax} must be even (got {ni})"
+                    raise ValueError(msg)
         if not (self.args[0].is_constant() and self.args[1].is_constant()):
-            raise ValueError("Integration bounds must be constants for this implementation")
-        
-        # Validate bounds ordering
-        if (hasattr(self.args[0], 'value') and hasattr(self.args[1], 'value') and 
-            self.args[0].value is not None and self.args[1].value is not None and 
-            self.args[0].value > self.args[1].value):
-            upper_bound = self.args[1].value
-            lower_bound = self.args[0].value
-            raise ValueError(f"Upper bound ({upper_bound}) must be ≥ lower bound ({lower_bound})")
+            raise ValueError("Integration bounds must be constants for this implementation.")
+        if np.any(self.lower_bounds > self.upper_bounds):
+            raise ValueError("Upper bounds must be ≥ lower bounds.")
+        super().validate_arguments()
 
-        super(integrate, self).validate_arguments()
+    def _get_grid_and_weights(self, a, b):
+        grids = []
+        weights_axes = []
+        for axis in range(self.dim):
+            ni = self.n[axis]
+            ai, bi = a[axis], b[axis]
+            h = (bi - ai) / ni
+
+            if self.method == "left_riemann":
+                pts = np.linspace(ai, bi - h, ni)
+                ws = np.full(ni, h)
+            elif self.method == "right_riemann":
+                pts = np.linspace(ai + h, bi, ni)
+                ws = np.full(ni, h)
+            elif self.method == "midpoint":
+                pts = np.linspace(ai + h / 2, bi - h / 2, ni)
+                ws = np.full(ni, h)
+            elif self.method == "trapezoid":
+                pts = np.linspace(ai, bi, ni + 1)
+                ws = np.full(ni + 1, h)
+                ws[0] = h / 2
+                ws[-1] = h / 2
+            elif self.method == "simpsons":
+                # Simpson's rule: n must be even
+                pts = np.linspace(ai, bi, ni + 1)
+                ws = np.full(ni + 1, h / 3)
+                ws[0] = h / 3
+                ws[-1] = h / 3
+                ws[1:-1:2] *= 4    # odd indices
+                ws[2:-1:2] *= 2    # even indices (not ends)
+            grids.append(pts)
+            weights_axes.append(ws)
+        return grids, weights_axes
+
     def numeric(self, values):
-        """Compute the numerical integral using vectorized operations."""
-        lower_bound, upper_bound = values
-        
-        if lower_bound == upper_bound:
+        "Numerical integration: ND tensor product cubature over rectangular box, supports simpsons."
+        a = np.atleast_1d(values[0])
+        b = np.atleast_1d(values[1])
+        if np.all(a == b):
             return 0.0
-            
-        h = (upper_bound - lower_bound) / self.n
-        
-        # Generate sample points (vectorized)
-        if self.method == "left_riemann":
-            x_points = np.linspace(lower_bound, upper_bound - h, self.n)
-            weights = np.full(self.n, h)
-            
-        elif self.method == "right_riemann":
-            x_points = np.linspace(lower_bound + h, upper_bound, self.n)
-            weights = np.full(self.n, h)
-            
-        elif self.method == "midpoint":
-            x_points = np.linspace(lower_bound + h/2, upper_bound - h/2, self.n)
-            weights = np.full(self.n, h)
-            
-        elif self.method == "trapezoid":
-            x_points = np.linspace(lower_bound, upper_bound, self.n + 1)
-            weights = np.full(self.n + 1, h)
-            weights[0] = h/2
-            weights[-1] = h/2
-            
-        elif self.method == "simpsons":
-            x_points = np.linspace(lower_bound, upper_bound, self.n + 1)
-            weights = np.full(self.n + 1, h/3)
-            weights[0] = h/3
-            weights[-1] = h/3
-            weights[1::2] *= 4  # Odd indices get factor of 4
-            weights[2:-1:2] *= 2  # Even indices (except endpoints) get factor of 2
-        
-        # Evaluate function at all points (vectorized)
+
+        grids, weights_axes = self._get_grid_and_weights(a, b)
+        mesh = np.meshgrid(*grids, indexing='ij')
+        mesh_weights = np.meshgrid(*weights_axes, indexing='ij')
+        # ND grid: shape (num_points, dim)
+        points = np.stack([m.ravel() for m in mesh], axis=-1)
+        weights = np.prod(np.stack(mesh_weights, axis=-1), axis=-1).ravel()
+
+        # Evaluate function; attempt vectorized first
         try:
-            y_values = self.function(x_points)
-            y_values = np.asarray(y_values)
-            
-            if y_values.shape == ():
-                y_values = np.full_like(x_points, y_values)
-                
-        except (TypeError, ValueError):
-            y_values = np.array([self.function(xi) for xi in x_points])
-        
-        # Compute integral using dot product (vectorized)
-        result = np.dot(weights, y_values)
-        
-        if np.isscalar(result) or result.shape == ():
-            return float(result)
-        else:
-            return result
+            vals = self.function(*[arr.ravel() for arr in mesh])
+        except Exception:
+            vals = np.array([self.function(*pt) for pt in points])
+
+        vals = np.asarray(vals)
+        if vals.shape == ():
+            vals = np.full(points.shape[0], vals)
+
+        result = np.dot(weights, vals)
+        return float(result) if np.isscalar(result) or vals.shape == () else result
 
     def _grad(self, values):
-        """Gradient of the atom with respect to its arguments."""
         return [np.zeros(arg.shape) for arg in self.args]
 
     def shape_from_args(self) -> Tuple[int, ...]:
-        """Returns the shape of the expression."""
         return tuple()
 
     def sign_from_args(self) -> Tuple[bool, bool]:
-        """Returns sign (is positive, is negative) of the expression."""
         return (False, False)
 
     def is_atom_convex(self) -> bool:
-        """Is the atom convex?"""
         return True
 
     def is_atom_concave(self) -> bool:
-        """Is the atom concave?"""
         return False
 
     def is_incr(self, idx) -> bool:
-        """Is the composition non-decreasing in argument idx?"""
         return False
 
     def is_decr(self, idx) -> bool:
-        """Is the composition non-increasing in argument idx?"""
         return False
 
     def get_data(self):
-        """Return data needed to reconstruct the expression."""
         return [self.function, self.n, self.method]
 
     def graph_implementation(self, arg_objs, shape, data=None):
-        """Reduces the atom to an affine expression and list of constraints."""
         values = [arg.value for arg in self.args]
         integral_value = self.numeric(values)
         return lo.create_const(integral_value, shape), []

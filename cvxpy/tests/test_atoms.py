@@ -2119,32 +2119,49 @@ class TestDotsort(BaseTest):
         assert "You are solving a parameterized problem that is not DPP" in str(cm.exception)
 
     def test_integrate(self):
-        """Test numerical integration of a simple expression using various methods."""
-
-        def f(t):
-            return t**2
-        a, b = 0, 1
-        expected = 1 / 3  # Integral of t^2 over [0, 1]
+        # 1D TESTS
+        def f1d(t):
+            return t ** 2
+        a_1d, b_1d = 0, 1
+        expected_1d = 1/3  # Integral of t^2 over [0, 1]
 
         methods = ["trapezoid", "midpoint", "simpsons", "left_riemann", "right_riemann"]
+        n_simpsons = 1000  # Must be even for simpsons
+
         for method in methods:
+            n = n_simpsons if method == "simpsons" else 1000
             with self.subTest(method=method):
-                # First get the expression
-                expr = integrate(f, a, b, n=1000, method=method)
+                expr = integrate(f1d, a_1d, b_1d, n=n, method=method)
                 self.assertIsInstance(expr, cp.Expression)
-                
-                # Then evaluate it in a problem
-                prob = cp.Problem(cp.Minimize(expr))  # We minimize because we just want to evaluate
+
+                # Solve a dummy problem to evaluate the atom
+                prob = cp.Problem(cp.Minimize(expr))
                 prob.solve()
                 val = prob.value
-                
-                # Now compare the numerical value
-                self.assertAlmostEqual(val, expected, places=2)
+                self.assertAlmostEqual(val, expected_1d, places=2)
 
         # Edge case: zero-width interval
-        result = integrate(f, 1, 1, n=1000, method="trapezoid")
-        self.assertEqual(result.value, 0)  # Need to get the value of the Constant
+        result = integrate(f1d, 1, 1, n=1000, method="trapezoid")
+        self.assertEqual(result.value, 0)
 
-        # Invalid method should raise ValueError
+        # INVALID METHOD
         with self.assertRaises(ValueError):
-            integrate(f, a, b, method="bad_method")
+            integrate(f1d, a_1d, b_1d, method="bad_method")
+
+        # MULTIDIMENSIONAL TEST
+        # Integrate f(x, y) = x*y over [0,1] x [0,1]: exact = 1/4
+        def f2d(x, y):
+            return x * y
+        a_2d = [0, 0]
+        b_2d = [1, 1]
+        expected_2d = 0.25
+
+        for method in methods:
+            n = n_simpsons if method == "simpsons" else 1000
+            with self.subTest(method="2d_" + method):
+                expr = integrate(f2d, a_2d, b_2d, n=n, method=method)
+                self.assertIsInstance(expr, cp.Expression)
+                prob = cp.Problem(cp.Minimize(expr))
+                prob.solve()
+                val = prob.value
+                self.assertAlmostEqual(val, expected_2d, places=2)

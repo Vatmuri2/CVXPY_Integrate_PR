@@ -33,19 +33,36 @@ class integrate(Atom):
     Parameters
     ----------
     function : callable
-        Function f(x) or f(x, y, ...) returning a scalar or numpy array.
+        Function f(z;x) returning a scalar, where z is a valid convex cvxpy
+        expression and x is a list of cvxp parameters. 
         Should support vectorized evaluation if possible.
-    a : scalar or sequence
-        Lower bound(s) (must be constant).
-    b : scalar or sequence
+    a : scalar or list
+        Lower bound(s) (must be constant). 
+    b : scalar or list
         Upper bound(s) (must be constant).
-    n : int or sequence, optional
+    n : int or list, optional
         Number of subintervals per dimension, defaults to 1000.
     method : str, optional
         Integration method; default is "trapezoid".
 
     Example
     -------
+    a = cvx.Variable()
+    b = cvx.Variable(pos=True)
+    x = cvx.Parameter()
+
+    f = lambda x: cvx.square(a * x + b)
+    obj = cvx.integrate(f, x, 0, 1, 200)
+
+    a = cvx.Variable()
+    b = cvx.Variable(pos=True)
+    x = cvx.Parameter(2)
+    
+    f = lambda c: cvx.square(a * x[0] + b * x[1])
+    obj = cvx.integrate(f, x, [0,0], [1,1], [50, 100)
+
+    
+    
     # 1D
     result = integrate(lambda x: x**2, 0, 1)
 

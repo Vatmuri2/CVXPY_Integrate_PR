@@ -33,8 +33,9 @@ class integrate(Atom):
     Parameters
     ----------
     function : callable
-        Function f(z;x) returning a scalar, where z is a valid convex cvxpy
-        expression and x is a list of cvxp parameters. 
+        Function f(z;x) returning a scalar, where z is a set of cvxpy
+        variables and x is a list of cvxp parameters, and f(z;x) returns a valid
+        convex cxvpy expression. 
         Should support vectorized evaluation if possible.
     a : scalar or list
         Lower bound(s) (must be constant). 
@@ -63,6 +64,35 @@ class integrate(Atom):
     
     f = lambda c: cvx.square(a * x[0] + b * x[1])
     obj = cvx.integrate(f, x, [0,0], [1,1], [50, 100], method="simpsons")
+
+
+    Notes:
+       z = cvx.Variable(2)
+       x = cvx.Parameter(2)
+
+       def g(z, x):
+           return z[0]*x[0] + z[1] * x[1]
+
+       obj = cvx.integrate(g, z, x, [0,1], [1,1], [20, 50])
+
+       prob = cvx.Problem(g, [z[0]>=0, z[0] + z[1] >= -2])
+       
+    ## within cvx.integrate
+
+        x_0 = np.linspace(lower[0], upper[0], n[0])
+        x_1 = np.linspace(lower[1], upper[1], n[1])
+        ...
+
+        [X0,X1] = np.meshgrid(x_0, x_1)
+
+        gij_lambda = lambda x: g(z,x)
+
+        integral = 0
+        for i in range(n[0]):
+            for j in range(n[1]):
+                integral += weight[i,j] *  gij_lambda([X0[i,j], X1[i,j]])
+
+        return cvx.sum(integral)
 
     """
 

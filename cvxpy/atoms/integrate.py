@@ -47,6 +47,8 @@ class integrate(Atom):
 
     Example
     -------
+
+    # 1D
     a = cvx.Variable()
     b = cvx.Variable(pos=True)
     x = cvx.Parameter()
@@ -54,20 +56,14 @@ class integrate(Atom):
     f = lambda x: cvx.square(a * x + b)
     obj = cvx.integrate(f, x, 0, 1, 200)
 
+    # Multi-D
     a = cvx.Variable()
     b = cvx.Variable(pos=True)
     x = cvx.Parameter(2)
     
     f = lambda c: cvx.square(a * x[0] + b * x[1])
-    obj = cvx.integrate(f, x, [0,0], [1,1], [50, 100)
+    obj = cvx.integrate(f, x, [0,0], [1,1], [50, 100], method="simpsons")
 
-    
-    
-    # 1D
-    result = integrate(lambda x: x**2, 0, 1)
-
-    # Multi-D
-    result = integrate(lambda x, y: x**2/y, [-1, 1], [0.1, 2], n=200, method="simpsons")
     """
 
     def __init__(self, function, a, b, n=1000, method="trapezoid") -> None:

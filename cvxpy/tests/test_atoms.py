@@ -2119,49 +2119,59 @@ class TestDotsort(BaseTest):
         assert "You are solving a parameterized problem that is not DPP" in str(cm.exception)
 
     def test_integrate(self):
-        # 1D TESTS
-        def f1d(t):
-            return t ** 2
-        a_1d, b_1d = 0, 1
-        expected_1d = 1/3  # Integral of t^2 over [0, 1]
+        # 1D analytic test: ∫₀¹ z*x² dx = z*[x³/3]₀¹ = z/3
+        x = cp.Parameter()
+        z = cp.Variable()
+        expr_1d = z * cp.square(x)
+        integ_1d = integrate(expr_1d, x, 0, 1, n_points=100)
+        
+        # Test with fixed value
+        z.value = 3
+        result_1d = integ_1d.value
+        assert np.isclose(result_1d, 1.0, atol=1e-2)  # 3 * (1/3) = 1
+        
+        z.value = None
+        prob_1d = cp.Problem(cp.Minimize(integ_1d), [z >= 1])
+        prob_1d.solve()
+        assert np.isclose(z.value, 1, atol=1e-3)
+        assert np.isclose(integ_1d.value, 1/3, atol=1e-2)  # 1 * (1/3) = 1/3
 
-        methods = ["trapezoid", "midpoint", "simpsons", "left_riemann", "right_riemann"]
-        n_simpsons = 1000  # Must be even for simpsons
+        # 2D analytic test: ∫₀¹∫₀¹ z*x*y dy dx = z * (1/4)
+        x2 = cp.Parameter()
+        y2 = cp.Parameter()
+        z2 = cp.Variable()
+        expr_2d = z2 * x2 * y2
+        # integrate w.r.t (x2, y2) over [0,1]x[0,1]
+        integ_2d = integrate(expr_2d, [x2, y2], [0, 0], [1, 1], n_points=50)
+        
+        # Fixed z2 value
+        z2.value = 8
+        result_2d = integ_2d.value
+        assert np.isclose(result_2d, 2.0, atol=1e-2)  # 8 * (1/4) = 2
 
-        for method in methods:
-            n = n_simpsons if method == "simpsons" else 1000
-            with self.subTest(method=method):
-                expr = integrate(f1d, a_1d, b_1d, n=n, method=method)
-                self.assertIsInstance(expr, cp.Expression)
+        # Optimize z2 subject to lower bound
+        z2.value = None
+        prob_2d = cp.Problem(cp.Minimize(integ_2d), [z2 >= 4])
+        prob_2d.solve()
+        assert np.isclose(z2.value, 4, atol=1e-3)
+        assert np.isclose(integ_2d.value, 1.0, atol=1e-2)  # 4 * (1/4) = 1
+        
+        x3 = cp.Parameter()
+        y3 = cp.Parameter()
+        w3 = cp.Parameter()
+        z3 = cp.Variable()
+        expr_3d = z3 * x3 * y3 * w3
+        # integrate w.r.t (x3, y3, w3) over [0,1]^3
+        integ_3d = integrate(expr_3d, [x3, y3, w3], [0, 0, 0], [1, 1, 1], n_points=20)
+        
+        # Fixed z3 value
+        z3.value = 8
+        result_3d = integ_3d.value
+        assert np.isclose(result_3d, 1.0, atol=1e-2)  # 8 * (1/8) = 1
 
-                # Solve a dummy problem to evaluate the atom
-                prob = cp.Problem(cp.Minimize(expr))
-                prob.solve()
-                val = prob.value
-                self.assertAlmostEqual(val, expected_1d, places=2)
-
-        # Edge case: zero-width interval
-        result = integrate(f1d, 1, 1, n=1000, method="trapezoid")
-        self.assertEqual(result.value, 0)
-
-        # INVALID METHOD
-        with self.assertRaises(ValueError):
-            integrate(f1d, a_1d, b_1d, method="bad_method")
-
-        # MULTIDIMENSIONAL TEST
-        # Integrate f(x, y) = x*y over [0,1] x [0,1]: exact = 1/4
-        def f2d(x, y):
-            return x * y
-        a_2d = [0, 0]
-        b_2d = [1, 1]
-        expected_2d = 0.25
-
-        for method in methods:
-            n = n_simpsons if method == "simpsons" else 1000
-            with self.subTest(method="2d_" + method):
-                expr = integrate(f2d, a_2d, b_2d, n=n, method=method)
-                self.assertIsInstance(expr, cp.Expression)
-                prob = cp.Problem(cp.Minimize(expr))
-                prob.solve()
-                val = prob.value
-                self.assertAlmostEqual(val, expected_2d, places=2)
+        # Optimize z3 subject to lower bound
+        z3.value = None
+        prob_3d = cp.Problem(cp.Minimize(integ_3d), [z3 >= 4])
+        prob_3d.solve()
+        assert np.isclose(z3.value, 4, atol=1e-3)
+        assert np.isclose(integ_3d.value, 0.5, atol=1e-2)  # 4 * (1/8) = 0.5

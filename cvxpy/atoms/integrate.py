@@ -7,180 +7,167 @@ You may obtain a copy of the License at
 
     https://www.apache.org/licenses/LICENSE-2.0
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+either express or implied.
+See the License for the specific language governing permissions
+and limitations under the License.
 """
-
-from typing import Tuple
-
 import numpy as np
 
-import cvxpy.lin_ops.lin_op as lo
 from cvxpy.atoms.atom import Atom
 from cvxpy.expressions.constants import Constant
+from cvxpy.expressions.expression import Expression
 
+
+def _substitute_params(expr, param_value_map):
+    if expr in param_value_map:
+        return Constant(param_value_map[expr])
+    if not hasattr(expr, 'args') or len(expr.args) == 0:
+        return expr
+    new_args = tuple(_substitute_params(arg, param_value_map) for arg in expr.args)
+    return expr.copy(new_args)
 
 class integrate(Atom):
-    """Numerical integration of a function over a (possibly multidimensional) box [a, b].
+    def __init__(self, expression, parameters, a, b, n_points=50, method="trapezoidal"):
+        if not isinstance(expression, Expression):
+            raise TypeError("expression must be a CVXPY Expression")
+        self.expression = expression
 
-    Supports multi-D integration if `a` and `b` are sequences (lists or arrays).
-    Supported methods: "left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons".
-    Simpson's rule requires even intervals per dimension.
+        if not isinstance(parameters, (list, tuple)):
+            parameters = (parameters,)
+        else:
+            parameters = tuple(parameters)
+        self._parameters = parameters
+        self.dim = len(self._parameters)
 
-    Parameters
-    ----------
-    function : callable
-        Function f(x) or f(x, y, ...) returning a scalar or numpy array.
-        Should support vectorized evaluation if possible.
-    a : scalar or sequence
-        Lower bound(s) (must be constant).
-    b : scalar or sequence
-        Upper bound(s) (must be constant).
-    n : int or sequence, optional
-        Number of subintervals per dimension, defaults to 1000.
-    method : str, optional
-        Integration method; default is "trapezoid".
+        from cvxpy import Parameter
+        for param in self._parameters:
+            if not isinstance(param, Parameter):
+                raise TypeError("All parameters must be CVXPY Parameters")
+            if not param.is_scalar():
+                raise ValueError("All parameters must be scalar")
 
-    Example
-    -------
-    # 1D
-    result = integrate(lambda x: x**2, 0, 1)
+        if not isinstance(a, (list, tuple, np.ndarray)):
+            a = [a] * self.dim
+        if not isinstance(b, (list, tuple, np.ndarray)):
+            b = [b] * self.dim
+        if len(a) != self.dim or len(b) != self.dim:
+            raise ValueError("Bounds must match number of parameters")
+        self.a = tuple(float(ai) for ai in a)
+        self.b = tuple(float(bi) for bi in b)
 
-    # Multi-D
-    result = integrate(lambda x, y: x**2/y, [-1, 1], [0.1, 2], n=200, method="simpsons")
-    """
-
-    def __init__(self, function, a, b, n=1000, method="trapezoid") -> None:
-        self.function = function
+        if any(ai >= bi for ai, bi in zip(self.a, self.b)):
+            raise ValueError("Each upper bound must be greater than lower bound.")
+        self.n_points = int(n_points)
+        if self.n_points < 2:
+            raise ValueError("n_points must be >= 2.")
+        if method != "trapezoidal":
+            raise ValueError("Only 'trapezoidal' method supported.")
         self.method = method
 
-        a_arr = np.atleast_1d(a)
-        b_arr = np.atleast_1d(b)
-        if a_arr.shape != b_arr.shape:
-            raise ValueError(f"Bounds a{a_arr.shape} and b{b_arr.shape} must match shapes.")
-        self.dim = a_arr.size
-
-        if isinstance(n, int):
-            self.n = [n] * self.dim
-        else:
-            self.n = list(n)
-            if len(self.n) != self.dim:
-                msg = f"n must match number of dimensions: got n={self.n}, dim={self.dim}"
-                raise ValueError(msg)
-
-        self.lower_bounds = a_arr.astype(float)
-        self.upper_bounds = b_arr.astype(float)
-
-        a_const = Constant(self.lower_bounds)
-        b_const = Constant(self.upper_bounds)
-        super().__init__(a_const, b_const)
-
-    def validate_arguments(self) -> None:
-        valid_methods = ["left_riemann", "right_riemann", "midpoint", "trapezoid", "simpsons"]
-        if self.method not in valid_methods:
-            raise ValueError(f"Unsupported method: {self.method}")
-        if any(ni <= 0 for ni in self.n):
-            raise ValueError("All n (subintervals per dimension) must be positive.")
-        if self.method == "simpsons":
-            for ax, ni in enumerate(self.n):
-                if ni % 2 != 0:
-                    msg = f"For simpsons method, n on axis {ax} must be even (got {ni})"
-                    raise ValueError(msg)
-        if not (self.args[0].is_constant() and self.args[1].is_constant()):
-            raise ValueError("Integration bounds must be constants for this implementation.")
-        if np.any(self.lower_bounds > self.upper_bounds):
-            raise ValueError("Upper bounds must be ≥ lower bounds.")
-        super().validate_arguments()
-
-    def _get_grid_and_weights(self, a, b):
-        grids = []
-        weights_axes = []
-        for axis in range(self.dim):
-            ni = self.n[axis]
-            ai, bi = a[axis], b[axis]
-            h = (bi - ai) / ni
-
-            if self.method == "left_riemann":
-                pts = np.linspace(ai, bi - h, ni)
-                ws = np.full(ni, h)
-            elif self.method == "right_riemann":
-                pts = np.linspace(ai + h, bi, ni)
-                ws = np.full(ni, h)
-            elif self.method == "midpoint":
-                pts = np.linspace(ai + h / 2, bi - h / 2, ni)
-                ws = np.full(ni, h)
-            elif self.method == "trapezoid":
-                pts = np.linspace(ai, bi, ni + 1)
-                ws = np.full(ni + 1, h)
-                ws[0] = h / 2
-                ws[-1] = h / 2
-            elif self.method == "simpsons":
-                # Simpson's rule: n must be even
-                pts = np.linspace(ai, bi, ni + 1)
-                ws = np.full(ni + 1, h / 3)
-                ws[0] = h / 3
-                ws[-1] = h / 3
-                ws[1:-1:2] *= 4    # odd indices
-                ws[2:-1:2] *= 2    # even indices (not ends)
-            grids.append(pts)
-            weights_axes.append(ws)
-        return grids, weights_axes
+        variables = list(expression.variables())
+        self._copy_data = (expression, self._parameters, self.a, self.b, self.n_points, self.method)
+        super().__init__(*variables)
 
     def numeric(self, values):
-        "Numerical integration: ND tensor product cubature over rectangular box, supports simpsons."
-        a = np.atleast_1d(values[0])
-        b = np.atleast_1d(values[1])
-        if np.all(a == b):
-            return 0.0
+        var_to_value = {var.id: values[i] for i, var in enumerate(self.variables())}
+        return self._numerical_integral(var_to_value)
 
-        grids, weights_axes = self._get_grid_and_weights(a, b)
-        mesh = np.meshgrid(*grids, indexing='ij')
-        mesh_weights = np.meshgrid(*weights_axes, indexing='ij')
-        # ND grid: shape (num_points, dim)
-        points = np.stack([m.ravel() for m in mesh], axis=-1)
-        weights = np.prod(np.stack(mesh_weights, axis=-1), axis=-1).ravel()
+    def _numerical_integral(self, var_to_value):
+        grids = []
+        weights_1d = []
+        for i in range(self.dim):
+            xi = np.linspace(self.a[i], self.b[i], self.n_points)
+            dx = xi[1] - xi[0]
+            wi = np.ones(len(xi)) * dx
+            wi[0] /= 2
+            wi[-1] /= 2
+            grids.append(tuple(xi))
+            weights_1d.append(tuple(wi))
 
-        # Evaluate function; attempt vectorized first
-        try:
-            vals = self.function(*[arr.ravel() for arr in mesh])
-        except Exception:
-            vals = np.array([self.function(*pt) for pt in points])
+        total = 0.0
+        meshgrids = np.meshgrid(*grids, indexing='ij')
+        weight_grids = np.meshgrid(*weights_1d, indexing='ij')
+        total_weights = np.ones(meshgrids[0].shape)
+        for w_grid in weight_grids:
+            total_weights *= w_grid
 
-        vals = np.asarray(vals)
-        if vals.shape == ():
-            vals = np.full(points.shape[0], vals)
+        it = np.nditer(meshgrids[0], flags=['multi_index'])
+        while not it.finished:
+            idx = it.multi_index
+            param_value_map = {}
+            for j, param in enumerate(self._parameters):
+                param_value_map[param] = float(meshgrids[j][idx])
+            expr_sub = _substitute_params(self.expression, param_value_map)
+            old_values = {}
+            for var in self.variables():
+                old_values[var.id] = var.value
+                var.value = var_to_value[var.id]
+            try:
+                expr_val = expr_sub.value
+            finally:
+                for var in self.variables():
+                    var.value = old_values[var.id]
+            total += total_weights[idx] * expr_val
+            it.iternext()
+        return total
 
-        result = np.dot(weights, vals)
-        return float(result) if np.isscalar(result) or vals.shape == () else result
+    def graph_implementation(self, arg_objs, shape, data=None):
+        grids = []
+        weights_1d = []
+        for i in range(self.dim):
+            xi = np.linspace(self.a[i], self.b[i], self.n_points)
+            dx = xi[1] - xi[0]
+            wi = np.ones(len(xi)) * dx
+            wi[0] /= 2
+            wi[-1] /= 2
+            grids.append(tuple(xi))
+            weights_1d.append(tuple(wi))
+        
+        meshgrids = np.meshgrid(*grids, indexing='ij')
+        weight_grids = np.meshgrid(*weights_1d, indexing='ij')
+        total_weights = np.ones(meshgrids[0].shape)
+        for w_grid in weight_grids:
+            total_weights *= w_grid
+        
+        # Build sum incrementally
+        total_expr = Constant(0.0)
+        it = np.nditer(meshgrids[0], flags=['multi_index'])
+        while not it.finished:
+            idx = it.multi_index
+            param_value_map = {}
+            for j, param in enumerate(self._parameters):
+                param_value_map[param] = float(meshgrids[j][idx])
+            expr_sub = _substitute_params(self.expression, param_value_map)
+            weighted_term = Constant(total_weights[idx]) * expr_sub
+            total_expr = total_expr + weighted_term
+            it.iternext()
+        
+        return total_expr.canonical_form
+    
+    def shape_from_args(self):
+        return tuple()
+
+    def sign_from_args(self):
+        return self.expression.sign
+
+    def is_atom_convex(self):
+        return True
+
+    def is_atom_concave(self):
+        return False
+
+    def is_incr(self, idx): return False
+    def is_decr(self, idx): return False
+
+    def is_atom_affine(self):
+        return self.expression.is_affine()
 
     def _grad(self, values):
         return [np.zeros(arg.shape) for arg in self.args]
-
-    def shape_from_args(self) -> Tuple[int, ...]:
-        return tuple()
-
-    def sign_from_args(self) -> Tuple[bool, bool]:
-        return (False, False)
-
-    def is_atom_convex(self) -> bool:
-        return True
-
-    def is_atom_concave(self) -> bool:
-        return False
-
-    def is_incr(self, idx) -> bool:
-        return False
-
-    def is_decr(self, idx) -> bool:
-        return False
-
-    def get_data(self):
-        return [self.function, self.n, self.method]
-
-    def graph_implementation(self, arg_objs, shape, data=None):
-        values = [arg.value for arg in self.args]
-        integral_value = self.numeric(values)
-        return lo.create_const(integral_value, shape), []
+    
+    def copy(self, args=None, id_objects=None):
+        (expression, parameters, a, b, n_points, method) = self._copy_data
+        return type(self)(expression, parameters, a, b, n_points, method)

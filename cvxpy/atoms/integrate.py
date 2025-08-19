@@ -53,7 +53,7 @@ class integrate(Atom):
     >>> x = cp.Variable()
     >>> alpha = cp.Parameter()
     >>> expr = cp.square(x + alpha)
-    >>> integral = integrate(expr, x, alpha, -1, 1)
+    >>> integral = integrate(expr, alpha, -1, 1)
     >>> problem = cp.Problem(cp.Minimize(integral))
     >>> x_opt = problem.solve()
     >>> print("Optimal x:", x.value)
@@ -65,7 +65,7 @@ class integrate(Atom):
     >>> alpha = cp.Parameter()
     >>> beta = cp.Parameter()
     >>> expr = cp.square(x) + cp.square(y) + alpha * beta
-    >>> integral_2d = integrate(expr, [x, y], [alpha, beta], [0, 0], [1, 2])
+    >>> integral_2d = integrate(expr, [alpha, beta], [0, 0], [1, 2])
     >>> prob = cp.Problem(cp.Minimize(integral_2d))
     >>> result = prob.solve()
     """

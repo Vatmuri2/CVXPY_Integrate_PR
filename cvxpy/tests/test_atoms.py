@@ -2119,35 +2119,59 @@ class TestDotsort(BaseTest):
         assert "You are solving a parameterized problem that is not DPP" in str(cm.exception)
 
     def test_integrate(self):
-        
-        # -------- 1. baseline: affine alpha --------
+        # 1D analytic test: ∫₀¹ z*x² dx = z*[x³/3]₀¹ = z/3
         x = cp.Parameter()
-        y = cp.Parameter()
-        alpha = cp.Variable()
-        beta = cp.Variable()
+        z = cp.Variable()
+        expr_1d = z * cp.square(x)
+        integ_1d = integrate(expr_1d, x, 0, 1, n_points=100)
+        
+        # Test with fixed value
+        z.value = 3
+        result_1d = integ_1d.value
+        assert np.isclose(result_1d, 1.0, atol=1e-2)  # 3 * (1/3) = 1
+        
+        z.value = None
+        prob_1d = cp.Problem(cp.Minimize(integ_1d), [z >= 1])
+        prob_1d.solve()
+        assert np.isclose(z.value, 1, atol=1e-3)
+        assert np.isclose(integ_1d.value, 1/3, atol=1e-2)  # 1 * (1/3) = 1/3
 
-        expr1 = cp.square(x)*alpha + y*beta
-        integ1 = integrate(expr1, [x, y], [0, 0], [1, 1], n_points=50)
+        # 2D analytic test: ∫₀¹∫₀¹ z*x*y dy dx = z * (1/4)
+        x2 = cp.Parameter()
+        y2 = cp.Parameter()
+        z2 = cp.Variable()
+        expr_2d = z2 * x2 * y2
+        # integrate w.r.t (x2, y2) over [0,1]x[0,1]
+        integ_2d = integrate(expr_2d, [x2, y2], [0, 0], [1, 1], n_points=50)
+        
+        # Fixed z2 value
+        z2.value = 8
+        result_2d = integ_2d.value
+        assert np.isclose(result_2d, 2.0, atol=1e-2)  # 8 * (1/4) = 2
 
-        prob1 = cp.Problem(cp.Minimize(integ1), [alpha >= 1, beta >= 1])
-        prob1.solve()
+        # Optimize z2 subject to lower bound
+        z2.value = None
+        prob_2d = cp.Problem(cp.Minimize(integ_2d), [z2 >= 4])
+        prob_2d.solve()
+        assert np.isclose(z2.value, 4, atol=1e-3)
+        assert np.isclose(integ_2d.value, 1.0, atol=1e-2)  # 4 * (1/4) = 1
+        
+        x3 = cp.Parameter()
+        y3 = cp.Parameter()
+        w3 = cp.Parameter()
+        z3 = cp.Variable()
+        expr_3d = z3 * x3 * y3 * w3
+        # integrate w.r.t (x3, y3, w3) over [0,1]^3
+        integ_3d = integrate(expr_3d, [x3, y3, w3], [0, 0, 0], [1, 1, 1], n_points=20)
+        
+        # Fixed z3 value
+        z3.value = 8
+        result_3d = integ_3d.value
+        assert np.isclose(result_3d, 1.0, atol=1e-2)  # 8 * (1/8) = 1
 
-        assert np.isclose(alpha.value, 1, atol=1e-3)
-        assert np.isclose(beta.value, 1, atol=1e-3)
-        assert np.isclose(integ1.value, 5/6, atol=1e-2)
-        print(f"Affine case: alpha={alpha.value}, beta={beta.value}, opt_val={integ1.value}")
-
-        # -------- 2. squared alpha --------
-        alpha2 = cp.Variable()
-        beta2 = cp.Variable()
-        expr2 = cp.square(x)*cp.square(alpha2) + y*beta2
-        integ2 = integrate(expr2, [x, y], [0, 0], [1, 1], n_points=50)
-
-
-        prob2 = cp.Problem(cp.Minimize(integ2), [alpha2 >= 1, beta2 >= 1])
-        prob2.solve()
-
-        assert np.isclose(alpha2.value, 1, atol=1e-3)
-        assert np.isclose(beta2.value, 1, atol=1e-3)
-        assert np.isclose(integ2.value, 5/6, atol=1e-2)
-        print(f"Squared case: alpha={alpha2.value}, beta={beta2.value}, opt_val={integ2.value}")
+        # Optimize z3 subject to lower bound
+        z3.value = None
+        prob_3d = cp.Problem(cp.Minimize(integ_3d), [z3 >= 4])
+        prob_3d.solve()
+        assert np.isclose(z3.value, 4, atol=1e-3)
+        assert np.isclose(integ_3d.value, 0.5, atol=1e-2)  # 4 * (1/8) = 0.5
